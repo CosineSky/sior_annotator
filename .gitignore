@@ -1,0 +1,26 @@
+# ===== Python virtual environment =====
+.venv/
+
+# ===== Output / generated files =====
+.output/
+
+# ===== Dataset (do not track any local data) =====
+.data/semlabels/
+.data/test_images/
+.data/trainval_images/
+.data/train.txt
+.data/valid.txt
+
+# (Optional) ignore all data under .data
+# .data/
+
+# ===== Model checkpoints / weights =====
+.sam/*.pth
+
+# (Optional) ignore entire sam directory
+# .sam/
+
+# ===== Misc =====
+__pycache__/
+*.pyc
+*.log
