@@ -6,28 +6,50 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-
+# =========================
+# Paths & config
+# =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 DATASET_DIR = os.path.join(PROJECT_ROOT, "dataset")
+LABEL_MAP_DIR = os.path.join(PROJECT_ROOT, "output", "label_maps")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 EPOCHS = 20
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 LR = 1e-3
+IMG_SIZE = 512
 
 
 # =========================
-# 1. Dataset
+# Infer number of classes
+# =========================
+def infer_num_classes(label_root):
+    max_id = 0
+    for name in os.listdir(label_root):
+        mask = cv2.imread(os.path.join(label_root, name), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            continue
+        max_id = max(max_id, int(mask.max()))
+    return max_id + 1  # include background
+
+
+NUM_CLASSES = infer_num_classes(LABEL_MAP_DIR)
+print(f"[INFO] NUM_CLASSES = {NUM_CLASSES}")
+
+
+# =========================
+# Dataset
 # =========================
 class SegDataset(Dataset):
     def __init__(self, split):
         self.img_dir = os.path.join(DATASET_DIR, "images", split)
         self.mask_dir = os.path.join(DATASET_DIR, "masks", split)
-        self.files = os.listdir(self.img_dir)
+        self.files = sorted(os.listdir(self.img_dir))
 
     def __len__(self):
         return len(self.files)
@@ -36,81 +58,97 @@ class SegDataset(Dataset):
         name = self.files[idx]
 
         img = cv2.imread(os.path.join(self.img_dir, name))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = img.transpose(2, 0, 1) / 255.0
-
         mask = cv2.imread(
             os.path.join(self.mask_dir, name),
             cv2.IMREAD_GRAYSCALE
         )
-        mask = (mask > 0).astype(np.float32)
+
+        # resize
+        img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        mask = cv2.resize(
+            mask,
+            (IMG_SIZE, IMG_SIZE),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = img.transpose(2, 0, 1) / 255.0
 
         return (
             torch.tensor(img, dtype=torch.float32),
-            torch.tensor(mask, dtype=torch.float32).unsqueeze(0)
+            torch.tensor(mask, dtype=torch.long)   # 🔴 关键
         )
 
 
 # =========================
-# 2. U-net
+# UNet (multi-class)
 # =========================
 class UNet(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes):
         super().__init__()
 
         def C(in_c, out_c):
             return nn.Sequential(
                 nn.Conv2d(in_c, out_c, 3, padding=1),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Conv2d(out_c, out_c, 3, padding=1),
-                nn.ReLU()
+                nn.ReLU(inplace=True)
             )
 
-        self.d1 = C(3, 64)
-        self.d2 = C(64, 128)
+        self.enc1 = C(3, 32)
+        self.enc2 = C(32, 64)
         self.pool = nn.MaxPool2d(2)
-        self.u1 = C(128 + 64, 64)
-        self.out = nn.Conv2d(64, 1, 1)
+
+        self.dec1 = C(64 + 32, 32)
+        self.out = nn.Conv2d(32, num_classes, 1)
 
     def forward(self, x):
-        c1 = self.d1(x)
-        c2 = self.d2(self.pool(c1))
-        u = torch.nn.functional.interpolate(c2, scale_factor=2)
-        u = self.u1(torch.cat([u, c1], dim=1))
-        return self.out(u)
+        c1 = self.enc1(x)
+        c2 = self.enc2(self.pool(c1))
+
+        u = torch.nn.functional.interpolate(
+            c2, scale_factor=2, mode="bilinear", align_corners=False
+        )
+        u = torch.cat([u, c1], dim=1)
+
+        return self.out(self.dec1(u))
 
 
 # =========================
-# 3. Training
+# Train
 # =========================
 def train():
-    model = UNet().to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
-    loss_fn = nn.BCEWithLogitsLoss()
+    model = UNet(NUM_CLASSES).to(DEVICE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    criterion = nn.CrossEntropyLoss()
 
     loader = DataLoader(
         SegDataset("train"),
         batch_size=BATCH_SIZE,
-        shuffle=True
+        shuffle=True,
+        num_workers=0
     )
 
     for epoch in range(EPOCHS):
         model.train()
-        total = 0.0
+        total_loss = 0
 
-        for x, y in tqdm(loader, desc=f"Epoch {epoch + 1}"):
-            x, y = x.to(DEVICE), y.to(DEVICE)
+        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
+        for imgs, masks in pbar:
+            imgs = imgs.to(DEVICE)
+            masks = masks.to(DEVICE)
 
-            pred = model(x)
-            loss = loss_fn(pred, y)
+            logits = model(imgs)          # [B, C, H, W]
+            loss = criterion(logits, masks)
 
-            opt.zero_grad()
+            optimizer.zero_grad()
             loss.backward()
-            opt.step()
+            optimizer.step()
 
-            total += loss.item()
+            total_loss += loss.item()
+            pbar.set_postfix(loss=loss.item())
 
-        print(f"Epoch {epoch + 1} Loss: {total / len(loader):.4f}")
+        print(f"Epoch {epoch+1} Mean Loss: {total_loss / len(loader):.4f}")
 
     torch.save(model.state_dict(), os.path.join(MODEL_DIR, "unet.pth"))
     print("[SUCCESS] Model saved.")

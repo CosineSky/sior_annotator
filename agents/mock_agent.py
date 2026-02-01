@@ -1,4 +1,6 @@
 import random
+from configs.semantic_map import SEMANTIC_MAP
+
 
 class MockLLMAgent:
     """
@@ -7,11 +9,7 @@ class MockLLMAgent:
     - Give a semantic type.
     """
 
-    SEMANTIC_CANDIDATES = [
-        "airport", "ship", "building",
-        "road", "farmland", "forest",
-        "water", "background"
-    ]
+    SEMANTIC_CANDIDATES = list(SEMANTIC_MAP.keys())
 
     def judge(self, image, mask):
         decision = random.choices(

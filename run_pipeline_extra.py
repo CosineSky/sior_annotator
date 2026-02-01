@@ -7,12 +7,10 @@ def run(cmd):
         raise RuntimeError(f"Command failed: {cmd}")
 
 def main():
-    run("python ./stages/parse_gray_label.py")
-    run("python ./stages/sam_full_image.py")
-    run("python ./stages/mask_cleaning.py")
-    run("python ./stages/build_label_map.py")
-    run("python ./stages/split_dataset.py")
-    run("python ./stages/train_unet.py")
+    run("python ./stages-extra/parse_gray_label.py")
+    run("python ./stages-extra/mask_cleaning.py")
+    run("python ./stages-extra/split_dataset.py")
+    run("python ./stages-extra/train_model.py")
     run("python ./stages/evaluate_mious.py")
 
     print("\n[SUCCESS] Pipeline finished successfully!")

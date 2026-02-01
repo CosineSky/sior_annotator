@@ -4,156 +4,143 @@ import csv
 import json
 import numpy as np
 from tqdm import tqdm
-import argparse
 
-from agents.llm_agent import LLMAgent
-from agents.mock_agent import MockLLMAgent
 from configs.semantic_map import SEMANTIC_MAP
 
-
+# =========================
+# Path config
+# =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 IMAGE_DIR = os.path.join(PROJECT_ROOT, "data/trainval_images")
-RAW_MASK_DIR = os.path.join(PROJECT_ROOT, "output/masks_refined")
+RAW_MASK_DIR = os.path.join(PROJECT_ROOT, "output/masks_raw")
 
-RULE_PASS_DIR = os.path.join(PROJECT_ROOT, "output/masks_rule_pass")
 FINAL_MASK_DIR = os.path.join(PROJECT_ROOT, "output/masks_final")
-FINAL_JSON_DIR = os.path.join(PROJECT_ROOT, "output/annotations_json")
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 
-os.makedirs(RULE_PASS_DIR, exist_ok=True)
 os.makedirs(FINAL_MASK_DIR, exist_ok=True)
-os.makedirs(FINAL_JSON_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
-RULE_LOG = os.path.join(LOG_DIR, "removed_rule.txt")
-AGENT_LOG = os.path.join(LOG_DIR, "removed_agent.txt")
-SCORE_LOG = os.path.join(LOG_DIR, "agent_scores.csv")
-
+SCORE_LOG = os.path.join(LOG_DIR, "semantic_quality.csv")
 
 # =========================
-# 1. Rule params
+# Config (semantic-level)
 # =========================
-MIN_RATIO = 0.001
-MAX_RATIO = 0.95
-MIN_COMPONENT_AREA = 300
-
+MIN_FOREGROUND_RATIO = 0.01     # 至少 1% 前景
+MAX_FOREGROUND_RATIO = 0.90     # 背景不能塌缩
+MIN_VALID_CLASSES = 1           # 至少 1 个前景类
+MAX_CLASS_FRAGMENT = 0.6        # 单类最大占比（防止一类吞全图）
+IGNORE_LABEL = 255              # 可选
 
 # =========================
-# 2. Rule method
+# Semantic quality score
 # =========================
-def rule_filter(mask):
-    ratio = mask.mean()
-    if ratio < MIN_RATIO or ratio > MAX_RATIO:
-        return False, "bad_ratio"
+def compute_semantic_quality(mask: np.ndarray):
+    """
+    mask: HxW, int semantic id
+    """
+    h, w = mask.shape
+    img_area = h * w
 
-    num, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
-    valid = sum(
-        stats[i, cv2.CC_STAT_AREA] > MIN_COMPONENT_AREA
-        for i in range(1, num)
+    valid_mask = mask != IGNORE_LABEL
+    if valid_mask.sum() == 0:
+        return 0.0, {"reason": "all_ignore"}
+
+    unique, counts = np.unique(mask[valid_mask], return_counts=True)
+    stat = dict(zip(unique.tolist(), counts.tolist()))
+
+    fg_pixels = sum(
+        c for k, c in stat.items()
+        if k != 0 and k != IGNORE_LABEL
     )
 
-    if valid == 0:
-        return False, "no_valid_component"
+    fg_ratio = fg_pixels / img_area
 
-    return True, "ok"
+    if fg_ratio < MIN_FOREGROUND_RATIO:
+        return 0.0, {"reason": "too_little_foreground", "fg_ratio": fg_ratio}
+
+    if fg_ratio > MAX_FOREGROUND_RATIO:
+        return 0.0, {"reason": "background_missing", "fg_ratio": fg_ratio}
+
+    fg_classes = [
+        k for k in stat.keys()
+        if k != 0 and k != IGNORE_LABEL
+    ]
+
+    if len(fg_classes) < MIN_VALID_CLASSES:
+        return 0.0, {"reason": "no_valid_class"}
+
+    max_class_ratio = max(
+        stat[k] / fg_pixels for k in fg_classes
+    )
+
+    if max_class_ratio > MAX_CLASS_FRAGMENT:
+        return 0.0, {
+            "reason": "class_dominates",
+            "max_class_ratio": max_class_ratio
+        }
+
+    # ---------- soft score ----------
+    class_balance_score = 1.0 - max_class_ratio
+    fg_score = min(fg_ratio / 0.2, 1.0)
+
+    score = 0.6 * class_balance_score + 0.4 * fg_score
+    score = float(np.clip(score, 0, 1))
+
+    details = {
+        "fg_ratio": fg_ratio,
+        "num_classes": len(fg_classes),
+        "max_class_ratio": max_class_ratio
+    }
+
+    return score, details
 
 
 # =========================
-# 3. Main process
+# Main pipeline
 # =========================
-def run_pipeline(mode="rule_only"):
-    """
-    mode: "rule_only" | "mock_agent" | "llm_agent"
-    """
-    if mode not in ["rule_only", "mock_agent", "llm_agent"]:
-        raise ValueError(f"Invalid mode: {mode}")
+def run_cleaning():
+    records = []
 
-    agent = None
-    if mode == "mock_agent":
-        agent = MockLLMAgent()
-    elif mode == "llm_agent":
-        agent = LLMAgent()
-
-    removed_rule = []
-    removed_agent = []
-    score_records = []
-
-    for name in tqdm(sorted(os.listdir(RAW_MASK_DIR))):
-        img_path = os.path.join(IMAGE_DIR, name)
+    for name in tqdm(sorted(os.listdir(RAW_MASK_DIR)), desc="Semantic checking"):
         mask_path = os.path.join(RAW_MASK_DIR, name)
-
-        image = cv2.imread(img_path)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
-        if image is None or mask is None:
+        if mask is None:
             continue
 
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask = (mask > 0).astype(np.uint8)
+        score, details = compute_semantic_quality(mask)
+        records.append((name, score, details))
 
-        # -------- Rule Stage --------
-        ok, reason = rule_filter(mask)
-        if not ok:
-            removed_rule.append(f"{name} {reason}")
-            continue
+    records.sort(key=lambda x: x[1], reverse=True)
 
-        cv2.imwrite(os.path.join(RULE_PASS_DIR, name), mask * 255)
-
-        # -------- Agent Stage --------
-        if mode != "rule_only":
-            result = agent.judge(image, mask)
-
-            score_records.append([
-                name,
-                result.get("decision", ""),
-                result.get("semantic", ""),
-                result.get("confidence", 0),
-                result.get("reason", "")
-            ])
-
-            if result.get("decision") == "discard":
-                removed_agent.append(f"{name} {result['reason']}")
-                continue
-
-            semantic = result.get("semantic", "")
-            class_id = SEMANTIC_MAP.get(semantic, 0)
-
-            # Save JSON Annotation
-            ann = {
-                "image": name,
-                "semantic": semantic,
-                "class_id": class_id,
-                "confidence": result.get("confidence", 0)
-            }
-            json_path = os.path.join(
-                FINAL_JSON_DIR,
-                name.replace(".png", ".json")
-            )
-            with open(json_path, "w") as f:
-                json.dump(ann, f, indent=2)
-
-        # -------- Save Final Mask --------
-        cv2.imwrite(os.path.join(FINAL_MASK_DIR, name), mask * 255)
-
-    # -------- Logs --------
-    with open(RULE_LOG, "w") as f:
-        f.write("\n".join(removed_rule))
-
-    with open(AGENT_LOG, "w") as f:
-        f.write("\n".join(removed_agent))
-
+    # ---- log ----
     with open(SCORE_LOG, "w", newline="") as f:
         writer = csv.writer(f)
-        if mode != "rule_only":
-            writer.writerow(["image", "decision", "semantic", "confidence", "reason"])
-            writer.writerows(score_records)
-        else:
-            writer.writerow(["image", "reason"])
-            for r in removed_rule:
-                writer.writerow([r.split()[0], r.split()[1]])
+        writer.writerow([
+            "image", "quality_score",
+            "fg_ratio", "num_classes", "max_class_ratio", "reason"
+        ])
+
+        for name, score, d in records:
+            writer.writerow([
+                name, score,
+                d.get("fg_ratio"),
+                d.get("num_classes"),
+                d.get("max_class_ratio"),
+                d.get("reason")
+            ])
+
+    # ---- save passed masks ----
+    for name, score, d in tqdm(records, desc="Saving"):
+        if score <= 0:
+            continue
+
+        src = os.path.join(RAW_MASK_DIR, name)
+        dst = os.path.join(FINAL_MASK_DIR, name)
+        cv2.imwrite(dst, cv2.imread(src, cv2.IMREAD_GRAYSCALE))
 
 
 if __name__ == "__main__":
-    run_pipeline(mode="mock_agent")
+    run_cleaning()
