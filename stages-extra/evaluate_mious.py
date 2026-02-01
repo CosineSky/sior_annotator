@@ -5,7 +5,6 @@ from tqdm import tqdm
 from datasets import SIORSemanticDataset
 from torch.utils.data import DataLoader
 from unet import UNet
-import cv2
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

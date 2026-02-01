@@ -9,6 +9,7 @@ def run(cmd):
 
 
 def main():
+    run("python ./stages-extra/sam_full_image.py")
     run("python ./stages-extra/parse_gray_label.py")
     run("python ./stages-extra/mask_cleaning.py")
     run("python ./stages-extra/split_dataset.py")

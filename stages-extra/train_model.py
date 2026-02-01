@@ -11,7 +11,6 @@ from unet import UNet
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 IGNORE_INDEX = 255
 
 

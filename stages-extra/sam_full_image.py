@@ -5,6 +5,7 @@ import torch
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
 
+from configs.semantic_map import SEMANTIC_MAP
 
 # =========================
 # 1. Paths & Hyper-params
@@ -16,13 +17,13 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "masks_raw")
 
 SAM_CHECKPOINT = os.path.join(PROJECT_ROOT, "sam", "sam_vit_b_01ec64.pth")
 MODEL_TYPE = "vit_b"
-DEVICE = "cpu" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+SEM_CLASSES = SEMANTIC_MAP
 GRID_SIZE = 64
 MIN_AREA_RATIO = 0.008
 MAX_AREA_RATIO = 0.45
 MIN_SCORE = 0.75
-
 MIN_COMPONENT_AREA = 100      # small noise removal
 MORPH_KERNEL = 5              # closing kernel size
 
@@ -52,28 +53,21 @@ def generate_grid_points(h, w, grid):
 # 4. Mask Quality Score
 # =========================
 def mask_quality(mask, image_area):
-    """
-    Lightweight heuristic quality score:
-    - area ratio
-    - connected component count
-    """
     area = mask.sum()
     area_ratio = area / image_area
-
     num_labels, _ = cv2.connectedComponents(mask.astype(np.uint8))
-    components = num_labels - 1  # exclude background
-
-    # score favors:
-    # - reasonable size
-    # - fewer fragments
+    components = num_labels - 1
     score = area_ratio * np.exp(-0.3 * max(0, components - 1))
     return score
 
 
 # =========================
-# 5. SAM Inference (Coarse)
+# 5. SAM Inference for one class
 # =========================
-def run_sam_on_image(predictor, image):
+def run_sam_on_class(predictor, image):
+    """
+    Returns a list of candidate masks (before assigning class IDs)
+    """
     h, w, _ = image.shape
     image_area = h * w
     predictor.set_image(image)
@@ -86,7 +80,6 @@ def run_sam_on_image(predictor, image):
             point_labels=np.array([1]),
             multimask_output=False
         )
-
         mask = masks[0]
         score = scores[0]
         area_ratio = mask.sum() / image_area
@@ -103,18 +96,19 @@ def run_sam_on_image(predictor, image):
 
 
 # =========================
-# 6. Mask Cleaning & Merge (Fine)
+# 6. Clean & Merge for one class
 # =========================
-def clean_and_merge(candidates, shape):
+def clean_and_merge(candidates, shape, class_id):
+    """
+    Merge masks for a single class, return a mask where pixels==class_id
+    """
     if len(candidates) == 0:
         return np.zeros(shape, dtype=np.uint8)
 
-    # sort by quality (high → low)
     candidates.sort(key=lambda x: x[0], reverse=True)
     merged = np.zeros(shape, dtype=np.uint8)
 
     for _, mask in candidates:
-        # remove tiny components
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         cleaned = np.zeros_like(mask)
 
@@ -124,17 +118,16 @@ def clean_and_merge(candidates, shape):
 
         merged |= cleaned
 
-    # morphological closing to fill holes
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (MORPH_KERNEL, MORPH_KERNEL)
-    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MORPH_KERNEL, MORPH_KERNEL))
     merged = cv2.morphologyEx(merged, cv2.MORPH_CLOSE, kernel)
 
-    return merged
+    # Assign class ID
+    merged_class = merged * class_id
+    return merged_class
 
 
 # =========================
-# 7. Main Pipeline
+# 7. Full-image multi-class mask generation
 # =========================
 def process_images():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -142,28 +135,32 @@ def process_images():
     image_files = sorted(os.listdir(IMAGE_DIR))
     done = set(os.listdir(OUTPUT_DIR))
 
-    for name in tqdm(image_files):
+    for name in tqdm(image_files, desc="Generating multi-class masks"):
         if name in done:
             continue
 
         img_path = os.path.join(IMAGE_DIR, name)
         image = cv2.imread(img_path)
-
         if image is None:
             print(f"[WARN] Cannot read image: {name}")
             continue
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w, _ = image.shape
-        candidates = run_sam_on_image(predictor, image)
-        label = clean_and_merge(candidates, (h, w))
+        final_mask = np.zeros((h, w), dtype=np.uint8)
 
-        if label.sum() == 0:
-            print(f"[WARN] {name}: empty after cleaning")
+        # iterate over all semantic classes
+        for class_id in SEM_CLASSES.keys():
+            candidates = run_sam_on_class(predictor, image)
+            class_mask = clean_and_merge(candidates, (h, w), class_id)
+            # merge into final mask, avoid overwriting existing class pixels
+            final_mask[class_mask > 0] = class_mask[class_mask > 0]
 
         save_path = os.path.join(OUTPUT_DIR, name)
-        cv2.imwrite(save_path, label * 255)
+        cv2.imwrite(save_path, final_mask)
 
 
 if __name__ == "__main__":
-    process_images()
+    # subject to change
+    # process_images()
+    pass

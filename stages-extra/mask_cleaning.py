@@ -8,6 +8,8 @@ from configs.api_key import LLM_ENDPOINT, LLM_API_KEY
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+# replace with masks_raw if SAM is manually run
 INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "semlabels", "gray")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "masks_cleaned_remap")
 IGNORE_ID = 255
