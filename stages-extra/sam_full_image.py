@@ -4,32 +4,30 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
-
+from agents.llm_agent import LLMAgent
+from configs.api_key import LLM_ENDPOINT, LLM_API_KEY
 from configs.semantic_map import SEMANTIC_MAP
 
-# =========================
-# 1. Paths & Hyper-params
-# =========================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 IMAGE_DIR = os.path.join(PROJECT_ROOT, "data", "trainval_images")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "masks_raw")
-
 SAM_CHECKPOINT = os.path.join(PROJECT_ROOT, "sam", "sam_vit_b_01ec64.pth")
 MODEL_TYPE = "vit_b"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEM_CLASSES = SEMANTIC_MAP
-GRID_SIZE = 64
-MIN_AREA_RATIO = 0.008
-MAX_AREA_RATIO = 0.45
-MIN_SCORE = 0.75
-MIN_COMPONENT_AREA = 100      # small noise removal
-MORPH_KERNEL = 5              # closing kernel size
+GRID_SIZE = 16
+MIN_AREA_RATIO = 0.0005
+MAX_AREA_RATIO = 0.5
+MIN_SCORE = 0.6
+MIN_COMPONENT_AREA = 100
+MORPH_KERNEL = 8
+SEM_ID_MAP = {name: idx for idx, name in enumerate(SEMANTIC_MAP.keys())}
 
 
 # =========================
-# 2. Load SAM
+# Load SAM
 # =========================
 def load_sam():
     sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
@@ -39,7 +37,7 @@ def load_sam():
 
 
 # =========================
-# 3. Grid Point Generator
+# Generate grid points
 # =========================
 def generate_grid_points(h, w, grid):
     points = []
@@ -50,7 +48,7 @@ def generate_grid_points(h, w, grid):
 
 
 # =========================
-# 4. Mask Quality Score
+# Mask quality
 # =========================
 def mask_quality(mask, image_area):
     area = mask.sum()
@@ -62,12 +60,9 @@ def mask_quality(mask, image_area):
 
 
 # =========================
-# 5. SAM Inference for one class
+# SAM inference (coarse mask generation)
 # =========================
-def run_sam_on_class(predictor, image):
-    """
-    Returns a list of candidate masks (before assigning class IDs)
-    """
+def run_sam(predictor, image):
     h, w, _ = image.shape
     image_area = h * w
     predictor.set_image(image)
@@ -84,9 +79,7 @@ def run_sam_on_class(predictor, image):
         score = scores[0]
         area_ratio = mask.sum() / image_area
 
-        if score < MIN_SCORE:
-            continue
-        if area_ratio < MIN_AREA_RATIO or area_ratio > MAX_AREA_RATIO:
+        if score < MIN_SCORE or area_ratio < MIN_AREA_RATIO or area_ratio > MAX_AREA_RATIO:
             continue
 
         q = mask_quality(mask, image_area)
@@ -96,12 +89,9 @@ def run_sam_on_class(predictor, image):
 
 
 # =========================
-# 6. Clean & Merge for one class
+# Merge masks
 # =========================
-def clean_and_merge(candidates, shape, class_id):
-    """
-    Merge masks for a single class, return a mask where pixels==class_id
-    """
+def clean_and_merge(candidates, shape):
     if len(candidates) == 0:
         return np.zeros(shape, dtype=np.uint8)
 
@@ -121,17 +111,19 @@ def clean_and_merge(candidates, shape, class_id):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MORPH_KERNEL, MORPH_KERNEL))
     merged = cv2.morphologyEx(merged, cv2.MORPH_CLOSE, kernel)
 
-    # Assign class ID
-    merged_class = merged * class_id
-    return merged_class
+    return merged
 
 
 # =========================
-# 7. Full-image multi-class mask generation
+# Main processing
 # =========================
-def process_images():
+def process_images(llm_enabled=True):
+    llm_endpoint = LLM_ENDPOINT
+    llm_api_key = LLM_API_KEY
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     predictor = load_sam()
+    llm_agent = LLMAgent(endpoint=llm_endpoint, api_key=llm_api_key) if llm_enabled else None
+
     image_files = sorted(os.listdir(IMAGE_DIR))
     done = set(os.listdir(OUTPUT_DIR))
 
@@ -147,20 +139,27 @@ def process_images():
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w, _ = image.shape
-        final_mask = np.zeros((h, w), dtype=np.uint8)
+        final_mask = np.full((h, w), 255, dtype=np.uint8)  # background=255
 
-        # iterate over all semantic classes
-        for class_id in SEM_CLASSES.keys():
-            candidates = run_sam_on_class(predictor, image)
-            class_mask = clean_and_merge(candidates, (h, w), class_id)
-            # merge into final mask, avoid overwriting existing class pixels
-            final_mask[class_mask > 0] = class_mask[class_mask > 0]
+        candidates = run_sam(predictor, image)
+        merged_mask = clean_and_merge(candidates, (h, w))
+
+        # Save temporary mask for LLM prompt
+        tmp_mask_path = os.path.join(OUTPUT_DIR, f"{name[:5]}.png")
+        cv2.imwrite(tmp_mask_path, merged_mask*255)  # foreground=255, background=0 for visualization
+
+        if llm_enabled:
+            result = llm_agent.classify_mask(img_path, tmp_mask_path)
+            if result["decision"] == "keep":
+                semantic_id = SEM_ID_MAP.get(result["semantic"], 0)
+                final_mask[merged_mask > 0] = semantic_id
+        else:
+            # fallback: assign all foreground to a default id (e.g., 1)
+            final_mask[merged_mask > 0] = 1
 
         save_path = os.path.join(OUTPUT_DIR, name)
         cv2.imwrite(save_path, final_mask)
 
 
 if __name__ == "__main__":
-    # subject to change
-    # process_images()
-    pass
+    process_images(llm_enabled=False)

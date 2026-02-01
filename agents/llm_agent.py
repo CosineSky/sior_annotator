@@ -73,3 +73,54 @@ class LLMAgent:
             "confidence": float(parsed.get("confidence", 0.0)),
             "reason": parsed.get("reason", "")
         }
+
+
+    def classify_mask(self, image_path, mask_path):
+        """
+        Args:
+            image_path: path to the original image
+            mask_path: path to SAM mask image (foreground=1, background=0)
+
+        Returns:
+            dict: {
+                "semantic": semantic_name,
+                "confidence": float,
+                "decision": "keep" / "discard"
+            }
+        """
+        prompt = f"""
+        You are an expert in remote sensing image analysis.
+        Given an image ({image_path}) and a candidate mask ({mask_path}) where 1=foreground, 0=background:
+        - Determine the semantic type of the mask. Choose from: {', '.join(self.SEMANTIC_CANDIDATES)}.
+        - Decide if the mask is valid ("keep") or invalid ("discard").
+        - Provide a confidence score between 0 and 1.
+        Return a JSON like: {{"semantic": "...", "confidence": 0.0, "decision": "..."}}.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        payload = {
+            "model": "gpt-4.1-mini",
+            "messages": [
+                {"role": "system", "content": "You are a strict visual quality control and semantic classification assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2
+        }
+
+        response = requests.post(self.endpoint, headers=headers, data=json.dumps(payload), timeout=60)
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            raise ValueError(f"LLM output is not valid JSON: {content}")
+
+        return {
+            "semantic": parsed.get("semantic", "background"),
+            "confidence": float(parsed.get("confidence", 0.0)),
+            "decision": parsed.get("decision", "discard")
+        }
