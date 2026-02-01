@@ -1,3 +1,6 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import torch
 import numpy as np

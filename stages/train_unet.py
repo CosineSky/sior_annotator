@@ -1,24 +1,22 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import cv2
 import torch
-import numpy as np
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-# =========================
-# Paths & config
-# =========================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
 DATASET_DIR = os.path.join(PROJECT_ROOT, "dataset")
 LABEL_MAP_DIR = os.path.join(PROJECT_ROOT, "output", "label_maps")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 EPOCHS = 20
 BATCH_SIZE = 2
 LR = 1e-3
@@ -36,7 +34,6 @@ def infer_num_classes(label_root):
             continue
         max_id = max(max_id, int(mask.max()))
     return max_id + 1  # include background
-
 
 NUM_CLASSES = infer_num_classes(LABEL_MAP_DIR)
 print(f"[INFO] NUM_CLASSES = {NUM_CLASSES}")
@@ -73,10 +70,9 @@ class SegDataset(Dataset):
 
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = img.transpose(2, 0, 1) / 255.0
-
         return (
             torch.tensor(img, dtype=torch.float32),
-            torch.tensor(mask, dtype=torch.long)   # 🔴 关键
+            torch.tensor(mask, dtype=torch.long)
         )
 
 
@@ -98,7 +94,6 @@ class UNet(nn.Module):
         self.enc1 = C(3, 32)
         self.enc2 = C(32, 64)
         self.pool = nn.MaxPool2d(2)
-
         self.dec1 = C(64 + 32, 32)
         self.out = nn.Conv2d(32, num_classes, 1)
 
@@ -115,7 +110,7 @@ class UNet(nn.Module):
 
 
 # =========================
-# Train
+# Training process
 # =========================
 def train():
     model = UNet(NUM_CLASSES).to(DEVICE)
@@ -140,7 +135,6 @@ def train():
 
             logits = model(imgs)          # [B, C, H, W]
             loss = criterion(logits, masks)
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

@@ -1,25 +1,20 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import cv2
 import numpy as np
 from tqdm import tqdm
-
 from configs.semantic_map import SEMANTIC_MAP
 
-# =========================
-# Path config
-# =========================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
 IMAGE_DIR = os.path.join(PROJECT_ROOT, "data", "trainval_images")
 MASK_DIR = os.path.join(PROJECT_ROOT, "output", "masks_final")
 LABEL_DIR = os.path.join(PROJECT_ROOT, "output", "label_maps")
-
 os.makedirs(LABEL_DIR, exist_ok=True)
 
-# =========================
-# Config
-# =========================
 IGNORE_LABEL = 255
 VALID_CLASS_IDS = set(SEMANTIC_MAP.values()) | {0}  # include background
 
@@ -28,7 +23,6 @@ def main():
     for name in tqdm(sorted(os.listdir(MASK_DIR)), desc="Building label maps"):
         mask_path = os.path.join(MASK_DIR, name)
         img_path = os.path.join(IMAGE_DIR, name)
-
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         image = cv2.imread(img_path)
 

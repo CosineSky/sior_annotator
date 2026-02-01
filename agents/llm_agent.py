@@ -1,7 +1,5 @@
-import random
-import requests
 import json
-
+import requests
 from configs.semantic_map import SEMANTIC_MAP
 
 
@@ -12,7 +10,7 @@ class LLMAgent:
     - Provide a semantic type.
     """
 
-    SEMANTIC_CANDIDATES = SEMANTIC_MAP.keys()
+    SEMANTIC_CANDIDATES = list(SEMANTIC_MAP.keys())
 
     def __init__(self, endpoint="", api_key=""):
         self.endpoint = endpoint
@@ -21,8 +19,8 @@ class LLMAgent:
     def judge(self, image, mask):
         """
         Args:
-            image: Original image (can be path or base64)
-            mask: Mask image (can be path or base64)
+            image: Original image (path or base64)
+            mask: Mask image (path or base64)
         Returns:
             dict: {
                 "decision": "keep" / "discard",
@@ -31,11 +29,8 @@ class LLMAgent:
                 "reason": str
             }
         """
-
-        # Construct prompt for the LLM
         prompt = f"""
-            You are a remote sensing image analysis expert.
-            Given an image and its mask:
+            You are a remote sensing image analysis expert. Given an image and its mask:
             - Image: {image}
             - Mask: {mask}
             
@@ -45,15 +40,9 @@ class LLMAgent:
             and explain your reasoning in one sentence.
             
             Return your answer in JSON format:
-            {{
-              "decision": "...",
-              "semantic": "...",
-              "confidence": 0.0,
-              "reason": "..."
-            }}
+            {{ "decision": "...", "semantic": "...", "confidence": 0.0, "reason": "..." }}
         """
 
-        # LLM API call
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
@@ -61,34 +50,23 @@ class LLMAgent:
         payload = {
             "model": "gpt-4.1-mini",
             "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a strict visual quality control and semantic classification assistant."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "system", "content": "You are a strict visual quality control and semantic classification assistant."},
+                {"role": "user", "content": prompt}
             ],
             "temperature": 0.2
         }
 
-        response = requests.post(
-            self.endpoint,
-            headers=headers,
-            data=json.dumps(payload),
-            timeout=60
-        )
+        response = requests.post(self.endpoint, headers=headers, data=json.dumps(payload), timeout=60)
         response.raise_for_status()
         result = response.json()
 
-        # Parse LLM output
         content = result["choices"][0]["message"]["content"]
 
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
             raise ValueError(f"LLM output is not valid JSON: {content}")
+
         return {
             "decision": parsed.get("decision", "discard"),
             "semantic": parsed.get("semantic", "background"),

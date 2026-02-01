@@ -1,3 +1,6 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import cv2
 import numpy as np

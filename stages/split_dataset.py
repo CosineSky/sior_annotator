@@ -1,8 +1,12 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import shutil
 import random
 import cv2
 import numpy as np
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
@@ -14,7 +18,6 @@ OUT_DIR = os.path.join(PROJECT_ROOT, "dataset")
 TRAIN_NUM = 1000
 VAL_NUM = 200
 TEST_NUM = 200
-
 IGNORE_LABEL = 255
 
 random.seed(42)
@@ -33,11 +36,9 @@ def main():
     )
 
     random.shuffle(images)
-
     train = images[:TRAIN_NUM]
     val = images[TRAIN_NUM:TRAIN_NUM + VAL_NUM]
     test = images[TRAIN_NUM + VAL_NUM:TRAIN_NUM + VAL_NUM + TEST_NUM]
-
     splits = {"train": train, "val": val, "test": test}
 
     for split, files in splits.items():
@@ -60,7 +61,6 @@ def main():
 
             unique_ids = np.unique(mask)
             if len(unique_ids) <= 1:
-                # 全背景或异常 mask，跳过
                 continue
 
             shutil.copy(img_src, os.path.join(img_out, name))

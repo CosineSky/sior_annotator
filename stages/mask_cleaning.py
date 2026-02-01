@@ -1,37 +1,34 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import cv2
 import csv
-import json
 import numpy as np
 from tqdm import tqdm
 
-from configs.semantic_map import SEMANTIC_MAP
 
-# =========================
-# Path config
-# =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
 IMAGE_DIR = os.path.join(PROJECT_ROOT, "data/trainval_images")
 RAW_MASK_DIR = os.path.join(PROJECT_ROOT, "output/masks_raw")
-
 FINAL_MASK_DIR = os.path.join(PROJECT_ROOT, "output/masks_final")
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+SCORE_LOG = os.path.join(LOG_DIR, "semantic_quality.csv")
 
 os.makedirs(FINAL_MASK_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
-SCORE_LOG = os.path.join(LOG_DIR, "semantic_quality.csv")
 
 # =========================
 # Config (semantic-level)
 # =========================
-MIN_FOREGROUND_RATIO = 0.01     # 至少 1% 前景
-MAX_FOREGROUND_RATIO = 0.90     # 背景不能塌缩
-MIN_VALID_CLASSES = 1           # 至少 1 个前景类
-MAX_CLASS_FRAGMENT = 0.6        # 单类最大占比（防止一类吞全图）
-IGNORE_LABEL = 255              # 可选
+MIN_FOREGROUND_RATIO = 0.01
+MAX_FOREGROUND_RATIO = 0.90
+MIN_VALID_CLASSES = 1
+MAX_CLASS_FRAGMENT = 0.6
+IGNORE_LABEL = 255
+
 
 # =========================
 # Semantic quality score
@@ -42,7 +39,6 @@ def compute_semantic_quality(mask: np.ndarray):
     """
     h, w = mask.shape
     img_area = h * w
-
     valid_mask = mask != IGNORE_LABEL
     if valid_mask.sum() == 0:
         return 0.0, {"reason": "all_ignore"}
@@ -59,7 +55,6 @@ def compute_semantic_quality(mask: np.ndarray):
 
     if fg_ratio < MIN_FOREGROUND_RATIO:
         return 0.0, {"reason": "too_little_foreground", "fg_ratio": fg_ratio}
-
     if fg_ratio > MAX_FOREGROUND_RATIO:
         return 0.0, {"reason": "background_missing", "fg_ratio": fg_ratio}
 

@@ -1,3 +1,6 @@
+"""
+    Deprecated: This script is no longer in use.
+"""
 import os
 import cv2
 import numpy as np
@@ -5,29 +8,24 @@ import torch
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
 
+
 # =========================
 # 1. Paths & Hyper-params
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
 IMAGE_DIR = os.path.join(PROJECT_ROOT, "data", "trainval_images")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "masks_raw")
 
 SAM_CHECKPOINT = os.path.join(PROJECT_ROOT, "sam", "sam_vit_b_01ec64.pth")
 MODEL_TYPE = "vit_b"
-
 DEVICE = "cpu" if torch.cuda.is_available() else "cpu"
 
-# ----- Grid Prompt -----
 GRID_SIZE = 64
-
-# ----- Mask Filtering -----
 MIN_AREA_RATIO = 0.008
 MAX_AREA_RATIO = 0.45
 MIN_SCORE = 0.75
 
-# ----- Cleaning -----
 MIN_COMPONENT_AREA = 100      # small noise removal
 MORPH_KERNEL = 5              # closing kernel size
 
@@ -81,10 +79,8 @@ def mask_quality(mask, image_area):
 def run_sam_on_image(predictor, image):
     h, w, _ = image.shape
     image_area = h * w
-
     predictor.set_image(image)
     points = generate_grid_points(h, w, GRID_SIZE)
-
     candidates = []
 
     for (x, y) in points:
@@ -96,11 +92,10 @@ def run_sam_on_image(predictor, image):
 
         mask = masks[0]
         score = scores[0]
+        area_ratio = mask.sum() / image_area
 
         if score < MIN_SCORE:
             continue
-
-        area_ratio = mask.sum() / image_area
         if area_ratio < MIN_AREA_RATIO or area_ratio > MAX_AREA_RATIO:
             continue
 
@@ -119,7 +114,6 @@ def clean_and_merge(candidates, shape):
 
     # sort by quality (high → low)
     candidates.sort(key=lambda x: x[0], reverse=True)
-
     merged = np.zeros(shape, dtype=np.uint8)
 
     for _, mask in candidates:
@@ -147,7 +141,6 @@ def clean_and_merge(candidates, shape):
 # =========================
 def process_images():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     predictor = load_sam()
     image_files = sorted(os.listdir(IMAGE_DIR))
     done = set(os.listdir(OUTPUT_DIR))
@@ -165,7 +158,6 @@ def process_images():
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w, _ = image.shape
-
         candidates = run_sam_on_image(predictor, image)
         label = clean_and_merge(candidates, (h, w))
 
